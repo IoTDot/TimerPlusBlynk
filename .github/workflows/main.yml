@@ -1,0 +1,109 @@
+name: CI
+
+on:
+ push:
+    branches:
+      - release/v1.0
+    tags:
+      - 'v*'
+
+permissions:
+ contents: write
+ pull-requests: write
+
+jobs:
+ build1:
+   runs-on: ubuntu-latest
+   steps:
+     - name: Checkout Repository
+       uses: actions/checkout@v4.1.1
+
+     - name: Set up Python
+       uses: actions/setup-python@v5
+       with:
+         python-version: '3.x'
+
+     - name: Install PlatformIO
+       run: |
+         pip install -U platformio
+         platformio update
+     - name: Compile Code
+       run: |
+         platformio run -e nodemcuv2
+     - name: Upload Artifacts
+       uses: actions/upload-artifact@v4.3.1
+       with:
+         name: TimerPlusBlynk-ESP8266
+         path: .pio/build/nodemcuv2/firmware.bin
+         if-no-files-found: error
+
+ build2:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4.1.1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install PlatformIO
+        run: |
+          pip install -U platformio
+          platformio update
+      - name: Compile Code
+        run: |
+          platformio run -e esp32dev
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: TimerPlusBlynk-ESP32
+          path: .pio/build/esp32dev/firmware.bin
+          if-no-files-found: error
+
+ release:
+    name: Release project
+    runs-on: ubuntu-latest
+    needs: [build1, build2]
+    steps:
+      - name: Get latest release  
+        uses: wemogy/next-release-version-action@2.0.3
+        id: release-version
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: 'release/v1.0'
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4.1.4
+        with:
+          path: artifacts
+
+      - name: Create GitHub release
+        id: create-new-release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.release-version.outputs.next-version-name }}
+          name: TimerPlusBlynk ${{ steps.release-version.outputs.next-version-name }}
+      
+      - name: Upload ESP8266 release asset
+        uses: shogo82148/actions-upload-release-asset@v1.7.4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create-new-release.outputs.upload_url }}
+          asset_path: artifacts/TimerPlusBlynk-ESP8266/firmware.bin
+          asset_name: TimerPlusBlynk-ESP8266_${{ steps.release-version.outputs.next-version-name }}.bin
+          asset_content_type: application/octet-stream
+      
+      - name: Upload ESP32 release asset
+        uses: shogo82148/actions-upload-release-asset@v1.7.4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create-new-release.outputs.upload_url }}
+          asset_path: artifacts/TimerPlusBlynk-ESP32/firmware.bin
+          asset_name: TimerPlusBlynk-ESP32_${{ steps.release-version.outputs.next-version-name }}.bin
+          asset_content_type: application/octet-stream
