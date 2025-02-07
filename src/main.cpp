@@ -45,11 +45,87 @@ bool wifiActive = false;      // ESP połączone z siecią
 bool wifiConnecting = false;  // Próba połączenia (flaga informacyjna)
 bool wifiEnabled = false;     // Użytkownik włączył WiFi (przytrzymanie przycisku)
 
-// Zmienne do obsługi przycisku BOOT (do przełączania WiFi)
-bool buttonPressed = false;
-bool toggleDone = false;      // Zapobiega wielokrotnemu wywołaniu toggleWiFi()
-unsigned long buttonPressStartTime = 0;
+// Zmienne do wyświetlania komunikatów potwierdzających zmianę ustawień
+String confirmationMsg = "";
+unsigned long confirmationMsgTimestamp = 0;
+const unsigned long confirmationMsgDuration = 2000; // 2 sekundy
 
+void switchMode();
+// -------------------------------
+// Nowa obsługa przycisku – multi-click
+// -------------------------------
+const unsigned long clickTimeout = 500;       // ms oczekiwania na kolejne kliknięcie
+const unsigned long longPressThreshold = 5000;  // ms przytrzymania dla długiego naciśnięcia
+
+unsigned long buttonPressStartTime = 0;
+unsigned long lastButtonReleaseTime = 0;
+int clickCount = 0;
+bool buttonIsPressed = false;
+bool longPressTriggered = false;
+
+void processClicks(int count) {
+  Serial.print("Wykryto ");
+  Serial.print(count);
+  Serial.println(" kliknięć");
+  if (count == 1) {
+    // 1 klik – reset licznika
+    if (isStudying) {
+      currentTimer = studyTimeSetting;
+      confirmationMsg = "Reset\nSTUDY";
+      Serial.println("Reset licznika STUDY");
+    } else {
+      currentTimer = breakTimeSetting;
+      confirmationMsg = "Reset\nBREAK";
+      Serial.println("Reset licznika BREAK");
+    }
+    confirmationMsgTimestamp = millis();
+  }
+  else if (count == 2) {
+    // 2 kliki – zmiana czasu STUDY między 10 a 20 minut
+    if (studyTimeSetting == 10 * 60) {
+      studyTimeSetting = 20 * 60;
+      confirmationMsg = "STUDY:\n20 min";
+      Serial.println("Czas STUDY ustawiony na 20 minut");
+    } else {
+      studyTimeSetting = 10 * 60;
+      confirmationMsg = "STUDY:\n10 min";
+      Serial.println("Czas STUDY ustawiony na 10 minut");
+    }
+    if (isStudying) {
+      currentTimer = studyTimeSetting;
+    }
+    confirmationMsgTimestamp = millis();
+  }
+  else if (count == 3) {
+    // 3 kliki – zmiana czasu BREAK między 5 a 10 minut
+    if (breakTimeSetting == 5 * 60) {
+      breakTimeSetting = 10 * 60;
+      confirmationMsg = "BREAK:\n10 min";
+      Serial.println("Czas BREAK ustawiony na 10 minut");
+    } else {
+      breakTimeSetting = 5 * 60;
+      confirmationMsg = "BREAK:\n5 min";
+      Serial.println("Czas BREAK ustawiony na 5 minut");
+    }
+    if (!isStudying) {
+      currentTimer = breakTimeSetting;
+    }
+    confirmationMsgTimestamp = millis();
+  }
+  else if (count == 4) {
+    // 4 kliki – natychmiastowe przełączenie trybu
+    confirmationMsg = "Przelaczam \ntryb";
+    confirmationMsgTimestamp = millis();
+    Serial.println("Wymuszone przełączenie trybu");
+    switchMode();
+  }
+  else {
+    Serial.println("Nieobsługiwana liczba kliknięć");
+  }
+}
+
+
+// -------------------------------
 // Funkcja przełączająca WiFi – po przytrzymaniu przycisku BOOT przez 5 sekund
 void toggleWiFi() {
   if (!wifiEnabled) { // Jeśli WiFi jest wyłączone, to je włączamy
@@ -105,6 +181,26 @@ BLYNK_WRITE(V0) {
 void updateDisplay(unsigned long seconds, const char* label) {
   display.clearDisplay();
 
+  // Jeśli aktywny komunikat potwierdzający, wyświetl go przez określony czas
+  if (confirmationMsg != "" && (millis() - confirmationMsgTimestamp < confirmationMsgDuration)) {
+    display.setTextSize(2);
+    display.setTextColor(SSD1306_WHITE);
+    int16_t x1, y1;
+    uint16_t w, h;
+    display.getTextBounds(confirmationMsg.c_str(), 0, 0, &x1, &y1, &w, &h);
+    int msgX = (SCREEN_WIDTH - w) / 2;
+    int msgY = (SCREEN_HEIGHT - h) / 2;
+    display.setCursor(msgX, msgY);
+    display.print(confirmationMsg);
+    display.display();
+    return;
+  } else {
+    // Jeśli minął czas komunikatu – wyczyść go
+    confirmationMsg = "";
+  }
+
+  // Normalny tryb wyświetlania: etykieta, licznik oraz ikona WiFi
+
   // Rysowanie etykiety
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
@@ -135,6 +231,7 @@ void updateDisplay(unsigned long seconds, const char* label) {
 
   display.display();
 }
+
 
 // Wysyłanie statystyk do Blynk
 void sendStatsToBlynk() {
@@ -193,33 +290,57 @@ void setup() {
 }
 
 void loop() {
-  // Obsługa przycisku BOOT – przytrzymanie przez 5 sekund przełącza stan WiFi
-  if (digitalRead(BOOT_BUTTON_PIN) == LOW) {
-    if (!buttonPressed) {
-      buttonPressed = true;
-      buttonPressStartTime = millis();
-    } else {
-      if (!toggleDone && (millis() - buttonPressStartTime >= 5000)) {
-        toggleDone = true;
-        toggleWiFi();
-      }
-    }
-  } else {
-    buttonPressed = false;
-    toggleDone = false;
-  }
+  unsigned long currentMillis = millis();
+  
+  // -------------------------------
+  // Nowa obsługa przycisku (multi-click + long press)
+  // -------------------------------
+  bool currentButtonState = digitalRead(BOOT_BUTTON_PIN); // LOW = przycisk wciśnięty
 
-  // Sterowanie LED wyłącznie na podstawie stanu WiFi:
-  // - Gdy WiFi jest włączone (wifiEnabled == true) ale nie połączone (wifiActive == false),
-  //   LED świeci z mocą 30% (PWM).
-  // - W pozostałych przypadkach LED jest zgaszony.
+  // Wykrycie rozpoczęcia naciśnięcia
+  if (currentButtonState == LOW && !buttonIsPressed) {
+    buttonIsPressed = true;
+    buttonPressStartTime = currentMillis;
+    longPressTriggered = false;
+  }
+  
+  // Jeżeli przycisk nadal wciśnięty – sprawdzamy, czy przekroczono próg długiego przytrzymania
+  if (currentButtonState == LOW && buttonIsPressed && !longPressTriggered) {
+    if (currentMillis - buttonPressStartTime >= longPressThreshold) {
+      longPressTriggered = true;
+      toggleWiFi();
+      // W przypadku długiego przytrzymania nie liczymy kliknięć:
+      clickCount = 0;
+    }
+  }
+  
+  // Wykrycie puszczenia przycisku
+  if (currentButtonState == HIGH && buttonIsPressed) {
+    // Jeśli nie był wykryty długi press, zliczamy kliknięcie
+    if (!longPressTriggered) {
+      clickCount++;
+      lastButtonReleaseTime = currentMillis;
+    }
+    buttonIsPressed = false;
+  }
+  
+  // Jeśli minął czas oczekiwania na kolejne kliknięcie, przetwarzamy akcję
+  if (!buttonIsPressed && clickCount > 0 && (currentMillis - lastButtonReleaseTime >= clickTimeout)) {
+    processClicks(clickCount);
+    clickCount = 0;
+  }
+  
+  // -------------------------------
+  // Pozostała część pętli
+  // -------------------------------
+  
+  // Sterowanie LED – włączona tylko gdy WiFi jest włączone, ale jeszcze nie połączone.
   bool ledShouldBeOn = (wifiEnabled && !wifiActive);
   updateLED(ledShouldBeOn);
 
   // Obsługa łączenia – jeśli WiFi jest włączone, ciągle podejmujemy próbę połączenia.
   if (wifiEnabled) {
     if (WiFi.status() == WL_CONNECTED) {
-      // Jeśli uzyskano połączenie – ustawiamy flagę i inicjujemy Blynk (tylko przy pierwszym połączeniu)
       if (!wifiActive) {
         Serial.println("WiFi połączone.");
         wifiActive = true;
@@ -228,27 +349,22 @@ void loop() {
         Blynk.connect();
       }
     } else {
-      // Jeśli wcześniej mieliśmy połączenie, a teraz je straciliśmy – podejmujemy próbę ponownego łączenia.
       if (wifiActive) {
         Serial.println("Utracono połączenie, ponawiam próbę...");
         wifiActive = false;
         wifiConnecting = true;
-        // Resetujemy połączenie
         WiFi.disconnect();
         WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
       }
-      // Jeśli wciąż nie ma połączenia, to nie robimy nic – ESP będzie stale próbowało połączyć się.
     }
   }
 
-  // Jeśli połączenie jest nawiązane, wykonujemy Blynk
   if (wifiActive) {
     Blynk.run();
     timer.run();
   }
 
   // Obsługa odliczania czasu (study/break)
-  unsigned long currentMillis = millis();
   if (currentMillis - lastSecondMillis >= 1000) {
     lastSecondMillis = currentMillis;
     overallTime++;
