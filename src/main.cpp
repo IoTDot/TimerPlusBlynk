@@ -14,8 +14,8 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include "wifi_icon.h"    // Zaktualizowany plik – WIFI_ICON_WIDTH ustawiony na 16
-#include "led_control.h"  // Obsługa LED przez PWM (30% mocy)
+#include "wifi_icon.h"    // Rysowanie ikony WiFi
+#include "led_control.h"  // Sterowanie LED przez PWM (30% mocy)
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -39,26 +39,32 @@ unsigned int studySessions   = 0;
 unsigned int breakSessions   = 0;
 
 #define BOOT_BUTTON_PIN 0   // Przycisk BOOT (podciągnięty)
-bool wifiActive = false;
-bool wifiConnecting = false;
-unsigned long wifiConnectStartTime = 0;
+
+// Zmienne związane z WiFi
+bool wifiActive = false;      // ESP połączone z siecią
+bool wifiConnecting = false;  // Próba połączenia (flaga informacyjna)
+bool wifiEnabled = false;     // Użytkownik włączył WiFi (przytrzymanie przycisku)
+
+// Zmienne do obsługi przycisku BOOT (do przełączania WiFi)
 bool buttonPressed = false;
-bool wifiToggleTriggered = false;
+bool toggleDone = false;      // Zapobiega wielokrotnemu wywołaniu toggleWiFi()
 unsigned long buttonPressStartTime = 0;
 
-// Funkcja przełączająca WiFi (asynchronicznie)
+// Funkcja przełączająca WiFi – po przytrzymaniu przycisku BOOT przez 5 sekund
 void toggleWiFi() {
-  if (!wifiActive && !wifiConnecting) {
+  if (!wifiEnabled) { // Jeśli WiFi jest wyłączone, to je włączamy
     Serial.println("Włączanie WiFi...");
+    wifiEnabled = true;  // Użytkownik włączył WiFi
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     wifiConnecting = true;
-    wifiConnectStartTime = millis();
-  } else if (wifiActive) {
+  } else {  // Jeśli WiFi jest włączone, to je wyłączamy
     Serial.println("Wyłączanie WiFi...");
+    wifiEnabled = false;
     Blynk.disconnect();
     WiFi.disconnect();
     wifiActive = false;
+    wifiConnecting = false;
   }
 }
 
@@ -162,6 +168,7 @@ void setup() {
   // Inicjalizacja LED (PWM, 30% mocy)
   initLED();
 
+  // Na starcie WiFi jest wyłączone – zatem też LED będzie zgaszony.
   wifiActive = false;
   wifiConnecting = false;
   Serial.println("WiFi jest wyłączone. Aby włączyć, przytrzymaj przycisk BOOT przez 5 sekund.");
@@ -186,46 +193,61 @@ void setup() {
 }
 
 void loop() {
-  // Obsługa przycisku BOOT – wciśnięty przycisk przez 5 sekund wyzwala toggle WiFi
+  // Obsługa przycisku BOOT – przytrzymanie przez 5 sekund przełącza stan WiFi
   if (digitalRead(BOOT_BUTTON_PIN) == LOW) {
     if (!buttonPressed) {
       buttonPressed = true;
       buttonPressStartTime = millis();
     } else {
-      if (millis() - buttonPressStartTime >= 5000 && !wifiToggleTriggered) {
-        wifiToggleTriggered = true;
+      if (!toggleDone && (millis() - buttonPressStartTime >= 5000)) {
+        toggleDone = true;
         toggleWiFi();
       }
     }
   } else {
     buttonPressed = false;
-    wifiToggleTriggered = false;
+    toggleDone = false;
   }
 
-  // Aktualizacja LED: LED świeci (30% PWM) gdy trwa łączenie lub przycisk jest przytrzymany
-  bool ledShouldBeOn = wifiConnecting || wifiToggleTriggered;
+  // Sterowanie LED wyłącznie na podstawie stanu WiFi:
+  // - Gdy WiFi jest włączone (wifiEnabled == true) ale nie połączone (wifiActive == false),
+  //   LED świeci z mocą 30% (PWM).
+  // - W pozostałych przypadkach LED jest zgaszony.
+  bool ledShouldBeOn = (wifiEnabled && !wifiActive);
   updateLED(ledShouldBeOn);
 
-  // Asynchroniczne sprawdzanie statusu łączenia WiFi
-  if (wifiConnecting) {
+  // Obsługa łączenia – jeśli WiFi jest włączone, ciągle podejmujemy próbę połączenia.
+  if (wifiEnabled) {
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("WiFi połączone.");
-      wifiActive = true;
-      wifiConnecting = false;
-      Blynk.config(BLYNK_AUTH_TOKEN);
-      Blynk.connect();
-    } else if (millis() - wifiConnectStartTime >= 10000) {
-      Serial.println("Błąd połączenia WiFi.");
-      wifiConnecting = false;
-      wifiActive = false;
+      // Jeśli uzyskano połączenie – ustawiamy flagę i inicjujemy Blynk (tylko przy pierwszym połączeniu)
+      if (!wifiActive) {
+        Serial.println("WiFi połączone.");
+        wifiActive = true;
+        wifiConnecting = false;
+        Blynk.config(BLYNK_AUTH_TOKEN);
+        Blynk.connect();
+      }
+    } else {
+      // Jeśli wcześniej mieliśmy połączenie, a teraz je straciliśmy – podejmujemy próbę ponownego łączenia.
+      if (wifiActive) {
+        Serial.println("Utracono połączenie, ponawiam próbę...");
+        wifiActive = false;
+        wifiConnecting = true;
+        // Resetujemy połączenie
+        WiFi.disconnect();
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+      }
+      // Jeśli wciąż nie ma połączenia, to nie robimy nic – ESP będzie stale próbowało połączyć się.
     }
   }
 
+  // Jeśli połączenie jest nawiązane, wykonujemy Blynk
   if (wifiActive) {
     Blynk.run();
     timer.run();
   }
 
+  // Obsługa odliczania czasu (study/break)
   unsigned long currentMillis = millis();
   if (currentMillis - lastSecondMillis >= 1000) {
     lastSecondMillis = currentMillis;
