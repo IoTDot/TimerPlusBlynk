@@ -30,7 +30,9 @@ jobs:
 
       # Copying contents of config.h.example file to config.h for nodemcuv2 compilation
       - name: Copy config file for nodemcuv2
-        run: cp config.h.example config.h
+        run: cp src/config.h.example src/config.h
+
+
 
       - name: Compile Code
         run: platformio run -e nodemcuv2
@@ -60,7 +62,8 @@ jobs:
 
       # Copying contents of config.h.example file to config.h for esp32dev compilation
       - name: Copy config file for esp32dev
-        run: cp config.h.example config.h
+        run: cp src/config.h.example src/config.h
+
 
       - name: Compile Code
         run: platformio run -e esp32dev
