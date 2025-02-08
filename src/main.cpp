@@ -1,5 +1,6 @@
 #include "config.h"
 #include <Arduino.h>
+#include <Bounce2.h>  // Biblioteka Bounce2
 
 #if defined(ESP32)
   #include <WiFi.h>
@@ -48,18 +49,18 @@ bool wifiEnabled = false;     // Użytkownik włączył WiFi (przytrzymanie przy
 // Zmienne do wyświetlania komunikatów potwierdzających zmianę ustawień
 String confirmationMsg = "";
 unsigned long confirmationMsgTimestamp = 0;
-// Czas wyświetlania komunikatu zmiany statusu lub czasu timera np. STUDY: 20min lub Switch to
-const unsigned long confirmationMsgDuration = 2000; // ms
+// Czas wyświetlania komunikatu (np. STUDY: 20 min lub Switch to)
+const unsigned long confirmationMsgDuration = 1100; // ms
 
-// Nowe zmienne do szybszej aktualizacji wyświetlacza
+// Zmienne do szybszej aktualizacji wyświetlacza
 unsigned long lastDisplayUpdate = 0;
 const unsigned long displayUpdateInterval = 200; // aktualizacja co 200 ms
 
 // -------------------------------
-// Nowa obsługa przycisku – multi-click
+// Obsługa przycisku – multi-click z mechanizmem "blokady" dla jednego bloku
 // -------------------------------
-const unsigned long clickTimeout = 300;       // skrócony czas oczekiwania na kolejne kliknięcie (300 ms)
-const unsigned long longPressThreshold = 5000;  // ms przytrzymania dla długiego naciśnięcia
+const unsigned long clickTimeout = 300;       // czas oczekiwania na kolejne kliknięcie (300 ms)
+const unsigned long longPressThreshold = 5000;  // próg długiego przytrzymania (5000 ms)
 
 unsigned long buttonPressStartTime = 0;
 unsigned long lastButtonReleaseTime = 0;
@@ -67,10 +68,20 @@ int clickCount = 0;
 bool buttonIsPressed = false;
 bool longPressTriggered = false;
 
+// Mechanizm "cooldown" – po zakończeniu sekwencji kliknięć (uruchomieniu bloku)
+// nie przyjmujemy kolejnych kliknięć, aż do wygaśnięcia komunikatu potwierdzającego
+bool newMultiClickAllowed = true;
+unsigned long lastMultiClickProcessTime = 0;
+const unsigned long multiClickProcessCooldown = 500; // ms
+
+// Inicjujemy obiekt Bounce dla przycisku
+Bounce debouncedButton = Bounce();
+
 void processClicks(int count) {
   Serial.print("Wykryto ");
   Serial.print(count);
   Serial.println(" kliknięć");
+  
   if (count == 1) {
     // 1 klik – reset licznika
     if (isStudying) {
@@ -82,7 +93,6 @@ void processClicks(int count) {
       confirmationMsg = "Reset\nBREAK";
       Serial.println("Reset licznika BREAK");
     }
-    confirmationMsgTimestamp = millis();
   }
   else if (count == 2) {
     // 2 kliki – zmiana czasu STUDY między 10 a 20 minut
@@ -98,7 +108,6 @@ void processClicks(int count) {
     if (isStudying) {
       currentTimer = studyTimeSetting;
     }
-    confirmationMsgTimestamp = millis();
   }
   else if (count == 3) {
     // 3 kliki – zmiana czasu BREAK między 5 a 10 minut
@@ -114,14 +123,11 @@ void processClicks(int count) {
     if (!isStudying) {
       currentTimer = breakTimeSetting;
     }
-    confirmationMsgTimestamp = millis();
   }
   else if (count == 4) {
     // 4 kliki – natychmiastowe przełączenie trybu
     confirmationMsg = "Switch\nto";
-    confirmationMsgTimestamp = millis();
     Serial.println("Wymuszone przełączenie trybu");
-    // Przełącz tryb
     if (isStudying) {
       Serial.println("Sesja STUDY zakończona.");
       isStudying = false;
@@ -137,11 +143,10 @@ void processClicks(int count) {
   else {
     Serial.println("Nieobsługiwana liczba kliknięć");
   }
+  // Zapisujemy moment wystawienia komunikatu
+  confirmationMsgTimestamp = millis();
 }
 
-// -------------------------------
-// Funkcja przełączająca WiFi – po przytrzymaniu przycisku BOOT przez 5 sekund
-// -------------------------------
 void toggleWiFi() {
   if (!wifiEnabled) { // Jeśli WiFi jest wyłączone, to je włączamy
     Serial.println("Włączanie WiFi...");
@@ -159,7 +164,6 @@ void toggleWiFi() {
   }
 }
 
-// Aktualizacja ustawień STUDY/BREAK przez Blynk
 BLYNK_WRITE(V1) {
   int newStudyTime = param.asInt();
   studyTimeSetting = newStudyTime;
@@ -180,11 +184,9 @@ BLYNK_WRITE(V2) {
   }
 }
 
-// Przełączanie trybu STUDY/BREAK (przycisk V0 w aplikacji Blynk)
 BLYNK_WRITE(V0) {
   int value = param.asInt();
   if (value == 1) {
-    // Wykonujemy przełączenie trybu (analogicznie jak w processClicks przy 4 kliknięciach)
     if (isStudying) {
       Serial.println("Sesja STUDY zakończona.");
       isStudying = false;
@@ -203,7 +205,6 @@ BLYNK_WRITE(V0) {
 // Funkcja pomocnicza do rysowania wieloliniowego, wyśrodkowanego komunikatu
 // ---------------------------------------------------------------------
 void displayConfirmationMsg(const String &msg) {
-  // Podział komunikatu na linie
   const int maxLines = 10; // maksymalna liczba linii
   String lines[maxLines];
   int numLines = 0;
@@ -215,23 +216,17 @@ void displayConfirmationMsg(const String &msg) {
       startIndex = i + 1;
     }
   }
-  // Dodaj ostatnią linię (lub całość, gdy brak '\n')
   if (startIndex < msg.length() && numLines < maxLines) {
     lines[numLines++] = msg.substring(startIndex);
   }
   
-  // Ustawienia czcionki – używamy textSize(2)
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
   
-  // Oblicz całkowitą wysokość komunikatu
   int lineHeight = 26;
   int totalHeight = numLines * lineHeight;
-  
-  // Wyznacz pionowy punkt startowy, aby komunikat był wyśrodkowany
   int startY = (SCREEN_HEIGHT - totalHeight) / 2;
   
-  // Rysuj każdą linię
   for (int i = 0; i < numLines; i++) {
     int16_t x1, y1;
     uint16_t w, h;
@@ -244,25 +239,20 @@ void displayConfirmationMsg(const String &msg) {
 }
 
 // ---------------------------------------------------------------------
-// Funkcja rysująca zawartość wyświetlacza OLED:
-// - Jeśli aktywny komunikat potwierdzający, wyświetla go
-// - W przeciwnym razie: etykieta (STUDY lub BREAK) (textSize 2),
-//   licznik czasu (textSize 3) oraz ikonę WiFi
+// Funkcja rysująca zawartość wyświetlacza OLED
 // ---------------------------------------------------------------------
 void updateDisplay(unsigned long seconds, const char* label) {
   display.clearDisplay();
   
-  // Jeśli aktywny komunikat potwierdzający – wyświetl go
   if (confirmationMsg != "" && (millis() - confirmationMsgTimestamp < confirmationMsgDuration)) {
     displayConfirmationMsg(confirmationMsg);
     display.display();
     return;
   } else {
-    // Po upływie czasu komunikatu, czyścimy zmienną
+    // Po upływie czasu komunikatu czyścimy zmienną
     confirmationMsg = "";
   }
   
-  // Rysowanie etykiety
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
   int16_t x1, y1;
@@ -273,13 +263,11 @@ void updateDisplay(unsigned long seconds, const char* label) {
   display.setCursor(labelX, labelY);
   display.print(label);
   
-  // Formatowanie czasu jako MM:SS
   int minutes = seconds / 60;
   int sec = seconds % 60;
   char timeStr[10];
   sprintf(timeStr, "%02d:%02d", minutes, sec);
   
-  // Rysowanie zegara (tekst size 3)
   display.setTextSize(3);
   display.getTextBounds(timeStr, 0, 0, &x1, &y1, &w, &h);
   int timeX = (SCREEN_WIDTH - w) / 2;
@@ -287,13 +275,11 @@ void updateDisplay(unsigned long seconds, const char* label) {
   display.setCursor(timeX, timeY);
   display.print(timeStr);
   
-  // Rysowanie ikony WiFi
   drawWiFiIcon(display, wifiActive, wifiConnecting);
   
   display.display();
 }
 
-// Wysyłanie statystyk do Blynk
 void sendStatsToBlynk() {
   Blynk.virtualWrite(V3, totalStudyTime);
   Blynk.virtualWrite(V4, totalBreakTime);
@@ -307,10 +293,11 @@ void setup() {
   Serial.begin(115200);
   pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
   
-  // Inicjalizacja LED (PWM, 30% mocy)
+  debouncedButton.attach(BOOT_BUTTON_PIN);
+  debouncedButton.interval(5); // czas odsprzężenia (ms)
+  
   initLED();
   
-  // Na starcie WiFi jest wyłączone – zatem też LED będzie zgaszony.
   wifiActive = false;
   wifiConnecting = false;
   Serial.println("WiFi jest wyłączone. Aby włączyć, przytrzymaj przycisk BOOT przez 5 sekund.");
@@ -336,50 +323,72 @@ void setup() {
 
 void loop() {
   unsigned long currentMillis = millis();
+
+  // ------------------------------
+  // Obsługa przycisku z Bounce2 – multi-click
+  // ------------------------------
+  debouncedButton.update();
   
-  // -------------------------------
-  // Obsługa przycisku (multi-click + long press)
-  // -------------------------------
-  bool currentButtonState = digitalRead(BOOT_BUTTON_PIN); // LOW = przycisk wciśnięty
+  // Sprawdzamy, czy jest aktywny komunikat potwierdzający (czyli blok już został uruchomiony)
+  bool confirmationActive = (confirmationMsg != "" && (currentMillis - confirmationMsgTimestamp < confirmationMsgDuration));
   
-  // Wykrycie rozpoczęcia naciśnięcia
-  if (currentButtonState == LOW && !buttonIsPressed) {
-    buttonIsPressed = true;
-    buttonPressStartTime = currentMillis;
-    longPressTriggered = false;
-  }
-  
-  // Jeśli przycisk nadal wciśnięty – sprawdzamy, czy przekroczono próg długiego przytrzymania
-  if (currentButtonState == LOW && buttonIsPressed && !longPressTriggered) {
-    if (currentMillis - buttonPressStartTime >= longPressThreshold) {
-      longPressTriggered = true;
-      toggleWiFi();
-      // W przypadku długiego przytrzymania nie liczymy kliknięć:
-      clickCount = 0;
+  // Jeśli aktywny komunikat – nie przetwarzamy nowych kliknięć
+  if (!confirmationActive) {
+    // Odblokowanie rozpoczęcia nowej sekwencji, jeśli przycisk jest wolny i minął cooldown
+    if (!newMultiClickAllowed) {
+      if (debouncedButton.read() == HIGH &&
+          (currentMillis - lastMultiClickProcessTime >= multiClickProcessCooldown)) {
+        newMultiClickAllowed = true;
+      }
+    }
+    
+    if (newMultiClickAllowed) {
+      // Wykrycie naciśnięcia przycisku (przejście HIGH -> LOW)
+      if (debouncedButton.fell()) {
+        buttonIsPressed = true;
+        buttonPressStartTime = currentMillis;
+        longPressTriggered = false;
+      }
+      
+      // Sprawdzamy, czy przycisk jest przytrzymany – długie naciśnięcie
+      if (buttonIsPressed && debouncedButton.read() == LOW && !longPressTriggered) {
+        if (currentMillis - buttonPressStartTime >= longPressThreshold) {
+          longPressTriggered = true;
+          toggleWiFi();
+          // Długie przytrzymanie – resetujemy liczenie kliknięć
+          clickCount = 0;
+          newMultiClickAllowed = false;
+          lastMultiClickProcessTime = currentMillis;
+        }
+      }
+      
+      // Wykrycie puszczenia przycisku (przejście LOW -> HIGH)
+      if (debouncedButton.rose()) {
+        if (!longPressTriggered) {
+          clickCount++;
+          lastButtonReleaseTime = currentMillis;
+        }
+        buttonIsPressed = false;
+      }
+      
+      // Jeśli minął czas oczekiwania na kolejne kliknięcie – przetwarzamy sekwencję
+      if (!buttonIsPressed && clickCount > 0 &&
+          (currentMillis - lastButtonReleaseTime >= clickTimeout)) {
+        processClicks(clickCount);
+        clickCount = 0;
+        newMultiClickAllowed = false;
+        lastMultiClickProcessTime = currentMillis;
+      }
     }
   }
+  // ------------------------------
+  // Koniec obsługi przycisku multi-click – nowe bloki nie będą sumowane, gdy komunikat jest aktywny.
   
-  // Wykrycie puszczenia przycisku
-  if (currentButtonState == HIGH && buttonIsPressed) {
-    if (!longPressTriggered) {
-      clickCount++;
-      lastButtonReleaseTime = currentMillis;
-    }
-    buttonIsPressed = false;
-  }
-  
-  // Jeśli minął czas oczekiwania na kolejne kliknięcie – przetwarzamy akcję
-  if (!buttonIsPressed && clickCount > 0 && (currentMillis - lastButtonReleaseTime >= clickTimeout)) {
-    processClicks(clickCount);
-    clickCount = 0;
-  }
-  
-  // -------------------------------
-  // Sterowanie LED – włączona tylko, gdy WiFi jest włączone, ale jeszcze nie połączone.
+  // Sterowanie LED – aktywna, gdy WiFi włączone, ale niepołączone
   bool ledShouldBeOn = (wifiEnabled && !wifiActive);
   updateLED(ledShouldBeOn);
   
-  // Obsługa łączenia – jeśli WiFi jest włączone, podejmujemy próbę połączenia.
+  // Obsługa połączenia WiFi
   if (wifiEnabled) {
     if (WiFi.status() == WL_CONNECTED) {
       if (!wifiActive) {
@@ -405,7 +414,6 @@ void loop() {
     timer.run();
   }
   
-  // -------------------------------
   // Aktualizacja timera (co 1 sekundę)
   if (currentMillis - lastSecondMillis >= 1000) {
     lastSecondMillis = currentMillis;
@@ -433,8 +441,7 @@ void loop() {
     }
   }
   
-  // -------------------------------
-  // Szybsza aktualizacja wyświetlacza (co 200 ms)
+  // Aktualizacja wyświetlacza (co 200 ms)
   if (currentMillis - lastDisplayUpdate >= displayUpdateInterval) {
     lastDisplayUpdate = currentMillis;
     if (isStudying) {
