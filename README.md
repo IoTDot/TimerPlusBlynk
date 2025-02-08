@@ -22,6 +22,15 @@ Edit the data in the file config.h.example and rename it to config.h
 <br>Blynk Reports
 <br>Blynk Statistics
 
+---
+
 ### Compiled releases
 
 They don't really matter, because the code compiles the contents of the config.h.example file, and it doesn't contain your WiFi or Blynk credentials
+
+---
+
+### Online Firmware Compilation
+
+For those who want to change their WiFi and Blynk credentials here (COM port drivers may be required to upload firmware to ESP)
+<br>it is possible to launch a limited, free Codespace in the future, to edit config.h.example, compile and upload firmware via web

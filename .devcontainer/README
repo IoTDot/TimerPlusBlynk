@@ -1,0 +1,7 @@
+plik devcontainer.json jest gotowy do utworzenia Codespace aby w przeglądarce uruchomić VSCode na którym zainstaluje sie PlatformIO, w którym można skompilować firmware.bin za pomocą przycisków na dolnym pasku VSCode (można też w terminalu uruchomić kompilację za pomocą polecenia)
+
+Wgranie firmware.bin można wykonać za pomocą webowych narzędzi dla ESP.
+
+Pliki firmware.bin kompilują sie do folderów:
+ - .pio/build/esp32dev/firmware.bin
+ - .pio/build/nodemcuv2/firmware.bin
