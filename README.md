@@ -21,3 +21,7 @@ Edit the data in the file config.h.example and rename it to config.h
 
 <br>Blynk Reports
 <br>Blynk Statistics
+
+### Compiled releases
+
+They don't really matter, because the code compiles the contents of the config.h.example file, and it doesn't contain your WiFi or Blynk credentials
