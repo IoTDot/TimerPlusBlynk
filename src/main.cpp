@@ -48,13 +48,17 @@ bool wifiEnabled = false;     // Użytkownik włączył WiFi (przytrzymanie przy
 // Zmienne do wyświetlania komunikatów potwierdzających zmianę ustawień
 String confirmationMsg = "";
 unsigned long confirmationMsgTimestamp = 0;
-const unsigned long confirmationMsgDuration = 2000; // 2 sekundy
+// Czas wyświetlania komunikatu zmiany statusu lub czasu timera np. STUDY: 20min lub Switch to
+const unsigned long confirmationMsgDuration = 2000; // ms
 
-void switchMode();
+// Nowe zmienne do szybszej aktualizacji wyświetlacza
+unsigned long lastDisplayUpdate = 0;
+const unsigned long displayUpdateInterval = 200; // aktualizacja co 200 ms
+
 // -------------------------------
 // Nowa obsługa przycisku – multi-click
 // -------------------------------
-const unsigned long clickTimeout = 500;       // ms oczekiwania na kolejne kliknięcie
+const unsigned long clickTimeout = 300;       // skrócony czas oczekiwania na kolejne kliknięcie (300 ms)
 const unsigned long longPressThreshold = 5000;  // ms przytrzymania dla długiego naciśnięcia
 
 unsigned long buttonPressStartTime = 0;
@@ -114,19 +118,30 @@ void processClicks(int count) {
   }
   else if (count == 4) {
     // 4 kliki – natychmiastowe przełączenie trybu
-    confirmationMsg = "Przelaczam \ntryb";
+    confirmationMsg = "Switch\nto";
     confirmationMsgTimestamp = millis();
     Serial.println("Wymuszone przełączenie trybu");
-    switchMode();
+    // Przełącz tryb
+    if (isStudying) {
+      Serial.println("Sesja STUDY zakończona.");
+      isStudying = false;
+      currentTimer = breakTimeSetting;
+      breakSessions++;
+    } else {
+      Serial.println("Sesja BREAK zakończona.");
+      isStudying = true;
+      currentTimer = studyTimeSetting;
+      studySessions++;
+    }
   }
   else {
     Serial.println("Nieobsługiwana liczba kliknięć");
   }
 }
 
-
 // -------------------------------
 // Funkcja przełączająca WiFi – po przytrzymaniu przycisku BOOT przez 5 sekund
+// -------------------------------
 void toggleWiFi() {
   if (!wifiEnabled) { // Jeśli WiFi jest wyłączone, to je włączamy
     Serial.println("Włączanie WiFi...");
@@ -166,41 +181,87 @@ BLYNK_WRITE(V2) {
 }
 
 // Przełączanie trybu STUDY/BREAK (przycisk V0 w aplikacji Blynk)
-void switchMode();
 BLYNK_WRITE(V0) {
   int value = param.asInt();
   if (value == 1) {
-    switchMode();
+    // Wykonujemy przełączenie trybu (analogicznie jak w processClicks przy 4 kliknięciach)
+    if (isStudying) {
+      Serial.println("Sesja STUDY zakończona.");
+      isStudying = false;
+      currentTimer = breakTimeSetting;
+      breakSessions++;
+    } else {
+      Serial.println("Sesja BREAK zakończona.");
+      isStudying = true;
+      currentTimer = studyTimeSetting;
+      studySessions++;
+    }
   }
 }
 
-// Funkcja rysująca zawartość wyświetlacza OLED:
-// - Etykieta (STUDY lub BREAK) czcionką size 2
-// - Powiększony zegar (size 3)
-// - Ikona WiFi (funkcja drawWiFiIcon z pliku wifi_icon.h)
-void updateDisplay(unsigned long seconds, const char* label) {
-  display.clearDisplay();
-
-  // Jeśli aktywny komunikat potwierdzający, wyświetl go przez określony czas
-  if (confirmationMsg != "" && (millis() - confirmationMsgTimestamp < confirmationMsgDuration)) {
-    display.setTextSize(2);
-    display.setTextColor(SSD1306_WHITE);
+// ---------------------------------------------------------------------
+// Funkcja pomocnicza do rysowania wieloliniowego, wyśrodkowanego komunikatu
+// ---------------------------------------------------------------------
+void displayConfirmationMsg(const String &msg) {
+  // Podział komunikatu na linie
+  const int maxLines = 10; // maksymalna liczba linii
+  String lines[maxLines];
+  int numLines = 0;
+  
+  int startIndex = 0;
+  for (int i = 0; i < msg.length(); i++) {
+    if (msg.charAt(i) == '\n') {
+      lines[numLines++] = msg.substring(startIndex, i);
+      startIndex = i + 1;
+    }
+  }
+  // Dodaj ostatnią linię (lub całość, gdy brak '\n')
+  if (startIndex < msg.length() && numLines < maxLines) {
+    lines[numLines++] = msg.substring(startIndex);
+  }
+  
+  // Ustawienia czcionki – używamy textSize(2)
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+  
+  // Oblicz całkowitą wysokość komunikatu
+  int lineHeight = 26;
+  int totalHeight = numLines * lineHeight;
+  
+  // Wyznacz pionowy punkt startowy, aby komunikat był wyśrodkowany
+  int startY = (SCREEN_HEIGHT - totalHeight) / 2;
+  
+  // Rysuj każdą linię
+  for (int i = 0; i < numLines; i++) {
     int16_t x1, y1;
     uint16_t w, h;
-    display.getTextBounds(confirmationMsg.c_str(), 0, 0, &x1, &y1, &w, &h);
-    int msgX = (SCREEN_WIDTH - w) / 2;
-    int msgY = (SCREEN_HEIGHT - h) / 2;
-    display.setCursor(msgX, msgY);
-    display.print(confirmationMsg);
+    display.getTextBounds(lines[i].c_str(), 0, 0, &x1, &y1, &w, &h);
+    int x = (SCREEN_WIDTH - w) / 2 - x1;
+    int y = startY + i * lineHeight;
+    display.setCursor(x, y);
+    display.print(lines[i]);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Funkcja rysująca zawartość wyświetlacza OLED:
+// - Jeśli aktywny komunikat potwierdzający, wyświetla go
+// - W przeciwnym razie: etykieta (STUDY lub BREAK) (textSize 2),
+//   licznik czasu (textSize 3) oraz ikonę WiFi
+// ---------------------------------------------------------------------
+void updateDisplay(unsigned long seconds, const char* label) {
+  display.clearDisplay();
+  
+  // Jeśli aktywny komunikat potwierdzający – wyświetl go
+  if (confirmationMsg != "" && (millis() - confirmationMsgTimestamp < confirmationMsgDuration)) {
+    displayConfirmationMsg(confirmationMsg);
     display.display();
     return;
   } else {
-    // Jeśli minął czas komunikatu – wyczyść go
+    // Po upływie czasu komunikatu, czyścimy zmienną
     confirmationMsg = "";
   }
-
-  // Normalny tryb wyświetlania: etykieta, licznik oraz ikona WiFi
-
+  
   // Rysowanie etykiety
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
@@ -211,13 +272,13 @@ void updateDisplay(unsigned long seconds, const char* label) {
   int labelY = 0;
   display.setCursor(labelX, labelY);
   display.print(label);
-
+  
   // Formatowanie czasu jako MM:SS
   int minutes = seconds / 60;
   int sec = seconds % 60;
   char timeStr[10];
   sprintf(timeStr, "%02d:%02d", minutes, sec);
-
+  
   // Rysowanie zegara (tekst size 3)
   display.setTextSize(3);
   display.getTextBounds(timeStr, 0, 0, &x1, &y1, &w, &h);
@@ -225,13 +286,12 @@ void updateDisplay(unsigned long seconds, const char* label) {
   int timeY = 28;
   display.setCursor(timeX, timeY);
   display.print(timeStr);
-
+  
   // Rysowanie ikony WiFi
   drawWiFiIcon(display, wifiActive, wifiConnecting);
-
+  
   display.display();
 }
-
 
 // Wysyłanie statystyk do Blynk
 void sendStatsToBlynk() {
@@ -243,49 +303,34 @@ void sendStatsToBlynk() {
   Serial.println("Statystyki wysłane do Blynk.");
 }
 
-// Przełączanie trybu STUDY/BREAK po zakończeniu sesji
-void switchMode() {
-  if (isStudying) {
-    Serial.println("Sesja STUDY zakończona.");
-    isStudying = false;
-    currentTimer = breakTimeSetting;
-    breakSessions++;
-  } else {
-    Serial.println("Sesja BREAK zakończona.");
-    isStudying = true;
-    currentTimer = studyTimeSetting;
-    studySessions++;
-  }
-}
-
 void setup() {
   Serial.begin(115200);
   pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
-
+  
   // Inicjalizacja LED (PWM, 30% mocy)
   initLED();
-
+  
   // Na starcie WiFi jest wyłączone – zatem też LED będzie zgaszony.
   wifiActive = false;
   wifiConnecting = false;
   Serial.println("WiFi jest wyłączone. Aby włączyć, przytrzymaj przycisk BOOT przez 5 sekund.");
-
+  
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println("Błąd inicjalizacji OLED!");
     while (true);
   }
   display.clearDisplay();
   display.display();
-
+  
   #if defined(ESP8266)
     Wire.begin();
   #endif
-
+  
   isStudying = true;
   currentTimer = studyTimeSetting;
   studySessions++;
   lastSecondMillis = millis();
-
+  
   timer.setInterval(5000L, sendStatsToBlynk);
 }
 
@@ -293,10 +338,10 @@ void loop() {
   unsigned long currentMillis = millis();
   
   // -------------------------------
-  // Nowa obsługa przycisku (multi-click + long press)
+  // Obsługa przycisku (multi-click + long press)
   // -------------------------------
   bool currentButtonState = digitalRead(BOOT_BUTTON_PIN); // LOW = przycisk wciśnięty
-
+  
   // Wykrycie rozpoczęcia naciśnięcia
   if (currentButtonState == LOW && !buttonIsPressed) {
     buttonIsPressed = true;
@@ -304,7 +349,7 @@ void loop() {
     longPressTriggered = false;
   }
   
-  // Jeżeli przycisk nadal wciśnięty – sprawdzamy, czy przekroczono próg długiego przytrzymania
+  // Jeśli przycisk nadal wciśnięty – sprawdzamy, czy przekroczono próg długiego przytrzymania
   if (currentButtonState == LOW && buttonIsPressed && !longPressTriggered) {
     if (currentMillis - buttonPressStartTime >= longPressThreshold) {
       longPressTriggered = true;
@@ -316,7 +361,6 @@ void loop() {
   
   // Wykrycie puszczenia przycisku
   if (currentButtonState == HIGH && buttonIsPressed) {
-    // Jeśli nie był wykryty długi press, zliczamy kliknięcie
     if (!longPressTriggered) {
       clickCount++;
       lastButtonReleaseTime = currentMillis;
@@ -324,21 +368,18 @@ void loop() {
     buttonIsPressed = false;
   }
   
-  // Jeśli minął czas oczekiwania na kolejne kliknięcie, przetwarzamy akcję
+  // Jeśli minął czas oczekiwania na kolejne kliknięcie – przetwarzamy akcję
   if (!buttonIsPressed && clickCount > 0 && (currentMillis - lastButtonReleaseTime >= clickTimeout)) {
     processClicks(clickCount);
     clickCount = 0;
   }
   
   // -------------------------------
-  // Pozostała część pętli
-  // -------------------------------
-  
-  // Sterowanie LED – włączona tylko gdy WiFi jest włączone, ale jeszcze nie połączone.
+  // Sterowanie LED – włączona tylko, gdy WiFi jest włączone, ale jeszcze nie połączone.
   bool ledShouldBeOn = (wifiEnabled && !wifiActive);
   updateLED(ledShouldBeOn);
-
-  // Obsługa łączenia – jeśli WiFi jest włączone, ciągle podejmujemy próbę połączenia.
+  
+  // Obsługa łączenia – jeśli WiFi jest włączone, podejmujemy próbę połączenia.
   if (wifiEnabled) {
     if (WiFi.status() == WL_CONNECTED) {
       if (!wifiActive) {
@@ -358,13 +399,14 @@ void loop() {
       }
     }
   }
-
+  
   if (wifiActive) {
     Blynk.run();
     timer.run();
   }
-
-  // Obsługa odliczania czasu (study/break)
+  
+  // -------------------------------
+  // Aktualizacja timera (co 1 sekundę)
   if (currentMillis - lastSecondMillis >= 1000) {
     lastSecondMillis = currentMillis;
     overallTime++;
@@ -376,8 +418,25 @@ void loop() {
     if (currentTimer > 0) {
       currentTimer--;
     } else {
-      switchMode();
+      // Automatyczne przełączenie trybu po zakończeniu odliczania
+      if (isStudying) {
+        Serial.println("Sesja STUDY zakończona.");
+        isStudying = false;
+        currentTimer = breakTimeSetting;
+        breakSessions++;
+      } else {
+        Serial.println("Sesja BREAK zakończona.");
+        isStudying = true;
+        currentTimer = studyTimeSetting;
+        studySessions++;
+      }
     }
+  }
+  
+  // -------------------------------
+  // Szybsza aktualizacja wyświetlacza (co 200 ms)
+  if (currentMillis - lastDisplayUpdate >= displayUpdateInterval) {
+    lastDisplayUpdate = currentMillis;
     if (isStudying) {
       updateDisplay(currentTimer, "STUDY");
     } else {
