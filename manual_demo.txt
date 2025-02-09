@@ -1,0 +1,76 @@
+
+Poniżej znajdziesz krok po kroku instrukcję, jak skonfigurować aplikację Blynk, aby wyświetlała wszystkie Twoje statystyki. W naszym kodzie dane są wysyłane na następujące wirtualne piny:
+
+V3 – Całkowity czas nauki (totalStudyTime)
+V4 – Całkowity czas przerw (totalBreakTime)
+V5 – Łączny czas (overallTime)
+V6 – Liczba uruchomionych sesji nauki (studySessions)
+V7 – Liczba uruchomionych sesji przerwy (breakSessions)
+V8 – Wartość historyczna (np. totalStudyTime) – używana w wykresie
+Poniżej opisuję, jak skonfigurować każdy z widgetów w aplikacji Blynk:
+
+1. Konfiguracja widgetów do wyświetlania wartości
+A. Wyświetlanie wartości tekstowych (Value Display)
+Otwórz swój projekt w aplikacji Blynk.
+Upewnij się, że jesteś zalogowany i otwórz projekt, do którego chcesz dodać statystyki.
+
+Dodaj widget "Value Display":
+
+Kliknij przycisk „+” lub przycisk dodawania widgetu.
+Wybierz widget Value Display (czasami nazywany „Display Value” lub „Label”).
+Skonfiguruj widget dla całkowitego czasu nauki (totalStudyTime):
+
+Virtual Pin: Ustaw na V3.
+Nazwa / Tytuł: Możesz nadać np. „Czas nauki” lub „Total Study Time”.
+Formatowanie: Jeśli chcesz wyświetlać dane w sekundach lub w formacie hh:mm:ss, możesz ustawić jednostkę lub skorzystać z funkcji formatowania dostępnych w edytorze widgetu.
+Skonfiguruj widget dla całkowitego czasu przerw (totalBreakTime):
+
+Virtual Pin: Ustaw na V4.
+Tytuł: „Czas przerwy” lub „Total Break Time”.
+Skonfiguruj widget dla łącznego czasu (overallTime):
+
+Virtual Pin: Ustaw na V5.
+Tytuł: „Łączny czas” lub „Overall Time”.
+Skonfiguruj widget dla liczby sesji nauki (studySessions):
+
+Virtual Pin: Ustaw na V6.
+Tytuł: „Sesje nauki” lub „Study Sessions”.
+Skonfiguruj widget dla liczby sesji przerwy (breakSessions):
+
+Virtual Pin: Ustaw na V7.
+Tytuł: „Sesje przerwy” lub „Break Sessions”.
+Wskazówka: Możesz umieścić te widgety obok siebie lub w osobnej zakładce, aby mieć przejrzysty widok statystyk.
+
+2. Konfiguracja wykresu statystyk
+Chociaż w starszych wersjach aplikacji Blynk istniał widget „History Chart”, obecnie (w Blynk IoT lub nowszych wersjach) używa się widgetu SuperChart lub Chart. Oto jak go skonfigurować:
+
+Dodaj widget wykresu:
+
+Kliknij przycisk dodawania nowego widgetu.
+Wybierz widget SuperChart (lub Chart – nazwa może się różnić w zależności od wersji aplikacji).
+Skonfiguruj widget wykresu:
+
+Virtual Pin: Ustaw na V8 (ponieważ w kodzie funkcja sendGraphStats() wysyła dane do V8).
+Tytuł: Nadaj nazwę, np. „Wykres czasu nauki” lub „Study Time History”.
+Update Interval / Częstotliwość aktualizacji: Ustaw zgodnie z interwałem wysyłania danych (w kodzie ustawiliśmy wysyłkę co 60 sekund, czyli możesz wpisać 60 sekund lub pozostawić auto, jeśli wykres sam dopasowuje interwał).
+Zakres osi Y: Jeśli chcesz, ustaw ręcznie minimalną i maksymalną wartość (np. od 0 do wartości, którą przewidujesz), lub wybierz opcję auto-skalowania.
+Kolor i styl wykresu: W zależności od opcji widgetu możesz ustawić kolor linii, styl wykresu, przezroczystość tła itp.
+Zapisz ustawienia widgetu:
+Po skonfigurowaniu upewnij się, że zapisałeś zmiany. Widget wykresu powinien rozpocząć zbieranie danych po wysłaniu pierwszych pomiarów przez Twoje urządzenie.
+
+
+Wybierz widget SuperChart / Chart
+W dostępnej liście wybierz widget SuperChart.
+
+Jeśli nie widzisz widgetu o takiej nazwie, upewnij się, że korzystasz z nowszej wersji aplikacji Blynk (Blynk IoT). W starszych wersjach (Blynk Classic) widget historyczny może mieć inną nazwę lub nie być dostępny – wtedy warto rozważyć aktualizację aplikacji.
+
+Umieść widget na ekranie
+Po wybraniu widgetu umieść go tam, gdzie chcesz, aby był widoczny w Twoim dashboardzie.
+
+Skonfiguruj właściwości widgetu
+
+Virtual Pin: Ustaw pole na V8 (ponieważ w kodzie dane do wykresu wysyłane są do wirtualnego pinu V8 – funkcja sendGraphStats() wysyła tam wybrany parametr, np. totalStudyTime).
+Title / Nazwa: Możesz nadać widgetowi nazwę, np. „Czas nauki” lub „Wykres statystyk”.
+Update Interval / Interwał odświeżania: Upewnij się, że interwał odświeżania odpowiada temu, z jakim często wysyłasz dane (w naszym kodzie co minutę). W razie potrzeby możesz ustawić np. 60 sekund.
+Range / Zakres osi Y: Jeśli chcesz, ustaw ręcznie zakres wartości osi Y (np. minimalna i maksymalna wartość). Możesz też użyć opcji auto-skalowania.
+Inne opcje: W zależności od wersji aplikacji możesz mieć możliwość konfiguracji koloru wykresu, stylu linii itp.

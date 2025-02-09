@@ -59,6 +59,9 @@ unsigned long overallTime    = 0;
 unsigned int studySessions   = 0;
 unsigned int breakSessions   = 0;
 
+// -------------------------
+// Przycisk BOOT
+// -------------------------
 #define BOOT_BUTTON_PIN 0   // Przycisk BOOT (podciągnięty)
 
 // -------------------------
@@ -103,13 +106,33 @@ const unsigned long multiClickProcessCooldown = 500; // ms
 // Inicjujemy obiekt Bounce dla przycisku
 Bounce debouncedButton = Bounce();
 
+// ---------------------------------------------------------------------
+// Funkcja przełączająca tryb (Study <-> Break)
+// ---------------------------------------------------------------------
+void switchMode() {
+  if (isStudying) {
+    Serial.println("Sesja STUDY zakończona.");
+    isStudying = false;
+    currentTimer = breakTimeSetting;
+    breakSessions++;
+  } else {
+    Serial.println("Sesja BREAK zakończona.");
+    isStudying = true;
+    currentTimer = studyTimeSetting;
+    studySessions++;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Funkcja obsługująca sekwencję kliknięć przycisku
+// ---------------------------------------------------------------------
 void processClicks(int count) {
   Serial.print("Wykryto ");
   Serial.print(count);
   Serial.println(" kliknięć");
   
   if (count == 1) {
-    // 1 klik – reset licznika
+    // 1 klik – reset licznika dla aktualnego trybu
     if (isStudying) {
       currentTimer = studyTimeSetting;
       confirmationMsg = "Reset\nSTUDY";
@@ -154,17 +177,7 @@ void processClicks(int count) {
     // 4 kliki – natychmiastowe przełączenie trybu
     confirmationMsg = "Switch\nto";
     Serial.println("Wymuszone przełączenie trybu");
-    if (isStudying) {
-      Serial.println("Sesja STUDY zakończona.");
-      isStudying = false;
-      currentTimer = breakTimeSetting;
-      breakSessions++;
-    } else {
-      Serial.println("Sesja BREAK zakończona.");
-      isStudying = true;
-      currentTimer = studyTimeSetting;
-      studySessions++;
-    }
+    switchMode();
   }
   else {
     Serial.println("Nieobsługiwana liczba kliknięć");
@@ -173,6 +186,9 @@ void processClicks(int count) {
   confirmationMsgTimestamp = millis();
 }
 
+// ---------------------------------------------------------------------
+// Funkcja do przełączania WiFi
+// ---------------------------------------------------------------------
 void toggleWiFi() {
   if (!wifiEnabled) { // Jeśli WiFi jest wyłączone, to je włączamy
     Serial.println("Włączanie WiFi...");
@@ -190,6 +206,9 @@ void toggleWiFi() {
   }
 }
 
+// ---------------------------------------------------------------------
+// Funkcje Blynk do odbioru nowych ustawień
+// ---------------------------------------------------------------------
 BLYNK_WRITE(V1) {
   int newStudyTime = param.asInt();
   studyTimeSetting = newStudyTime;
@@ -213,17 +232,7 @@ BLYNK_WRITE(V2) {
 BLYNK_WRITE(V0) {
   int value = param.asInt();
   if (value == 1) {
-    if (isStudying) {
-      Serial.println("Sesja STUDY zakończona.");
-      isStudying = false;
-      currentTimer = breakTimeSetting;
-      breakSessions++;
-    } else {
-      Serial.println("Sesja BREAK zakończona.");
-      isStudying = true;
-      currentTimer = studyTimeSetting;
-      studySessions++;
-    }
+    switchMode();
   }
 }
 
@@ -235,8 +244,8 @@ void displayConfirmationMsg(const String &msg) {
   String lines[maxLines];
   int numLines = 0;
   
-  int startIndex = 0;
-  for (int i = 0; i < msg.length(); i++) {
+  size_t startIndex = 0;
+  for (size_t i = 0; i < msg.length(); i++) {
     if (msg.charAt(i) == '\n') {
       lines[numLines++] = msg.substring(startIndex, i);
       startIndex = i + 1;
@@ -291,8 +300,9 @@ void updateDisplay(unsigned long seconds, const char* label) {
   
   int minutes = seconds / 60;
   int sec = seconds % 60;
-  char timeStr[10];
-  sprintf(timeStr, "%02d:%02d", minutes, sec);
+  char timeStr[16];
+  // Używamy snprintf zamiast sprintf, aby ograniczyć liczbę zapisywanych bajtów
+  snprintf(timeStr, sizeof(timeStr), "%02d:%02d", minutes, sec);
   
   display.setTextSize(3);
   display.getTextBounds(timeStr, 0, 0, &x1, &y1, &w, &h);
@@ -306,13 +316,26 @@ void updateDisplay(unsigned long seconds, const char* label) {
   display.display();
 }
 
+// ---------------------------------------------------------------------
+// Funkcja wysyłająca statystyki do Blynk
+// ---------------------------------------------------------------------
 void sendStatsToBlynk() {
-  Blynk.virtualWrite(V3, totalStudyTime);
-  Blynk.virtualWrite(V4, totalBreakTime);
-  Blynk.virtualWrite(V5, overallTime);
+  // Konwersja sekund na minuty (dzielimy przez 60)
+  Blynk.virtualWrite(V3, totalStudyTime / 60);
+  Blynk.virtualWrite(V4, totalBreakTime / 60);
+  Blynk.virtualWrite(V5, overallTime / 60);
   Blynk.virtualWrite(V6, studySessions);
   Blynk.virtualWrite(V7, breakSessions);
   Serial.println("Statystyki wysłane do Blynk.");
+}
+
+// ---------------------------------------------------------------------
+// Funkcja wysyłająca dane do wykresu (History Chart) na V8
+// ---------------------------------------------------------------------
+void sendGraphStats() {
+  // Przykładowo wysyłamy łączny czas nauki – możesz zmienić na dowolną statystykę
+  Blynk.virtualWrite(V8, totalStudyTime / 60);
+  Serial.println("Dane do wykresu wysłane do Blynk.");
 }
 
 void setup() {
@@ -344,10 +367,11 @@ void setup() {
   
   isStudying = true;
   currentTimer = studyTimeSetting;
-  studySessions++;
+  studySessions++;  // Rozpoczęcie pierwszej sesji STUDY
   lastSecondMillis = millis();
   
   timer.setInterval(5000L, sendStatsToBlynk);
+  timer.setInterval(60000L, sendGraphStats);  // Wysyłanie danych do wykresu co minutę
 }
 
 void loop() {
@@ -411,7 +435,7 @@ void loop() {
     }
   }
   // ------------------------------
-  // Koniec obsługi przycisku multi-click – nowe bloki nie będą sumowane, gdy komunikat jest aktywny.
+  // Koniec obsługi przycisku multi-click
   
   // Sterowanie LED – aktywna, gdy WiFi włączone, ale niepołączone
   bool ledShouldBeOn = (wifiEnabled && !wifiActive);
@@ -456,17 +480,7 @@ void loop() {
       currentTimer--;
     } else {
       // Automatyczne przełączenie trybu po zakończeniu odliczania
-      if (isStudying) {
-        Serial.println("Sesja STUDY zakończona.");
-        isStudying = false;
-        currentTimer = breakTimeSetting;
-        breakSessions++;
-      } else {
-        Serial.println("Sesja BREAK zakończona.");
-        isStudying = true;
-        currentTimer = studyTimeSetting;
-        studySessions++;
-      }
+      switchMode();
     }
     // Aktualizacja TM1637 - wyświetlanie w formacie mmss
     int minutes = currentTimer / 60;
