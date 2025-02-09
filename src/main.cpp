@@ -18,21 +18,41 @@
 #include "wifi_icon.h"    // Rysowanie ikony WiFi
 #include "led_control.h"  // Sterowanie LED przez PWM (30% mocy)
 
+// Dodajemy bibliotekę TM1637Display
+#include <TM1637Display.h>
+
+// -------------------------
+// Definicje wyświetlacza OLED
+// -------------------------
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// -------------------------
+// Definicje wyświetlacza TM1637
+// -------------------------
+#define TM_CLK_PIN 4    // Przykładowy pin CLK – dostosuj do swojego układu
+#define TM_DIO_PIN 5    // Przykładowy pin DIO – dostosuj do swojego układu
+TM1637Display tmDisplay(TM_CLK_PIN, TM_DIO_PIN);
+
+// -------------------------
+// Timer Blynk
+// -------------------------
 BlynkTimer timer;
 
-// Ustawienia czasów (w sekundach):
+// -------------------------
+// Ustawienia czasów (w sekundach)
 // STUDY = 10 minut, BREAK = 5 minut
+// -------------------------
 volatile unsigned long studyTimeSetting = 10 * 60; // 600 s
 volatile unsigned long breakTimeSetting = 5 * 60;  // 300 s
 volatile unsigned long currentTimer = studyTimeSetting;
 volatile bool isStudying = true;
 unsigned long lastSecondMillis = 0;
 
+// -------------------------
 // Statystyki
+// -------------------------
 unsigned long totalStudyTime = 0;
 unsigned long totalBreakTime = 0;
 unsigned long overallTime    = 0;
@@ -41,24 +61,30 @@ unsigned int breakSessions   = 0;
 
 #define BOOT_BUTTON_PIN 0   // Przycisk BOOT (podciągnięty)
 
+// -------------------------
 // Zmienne związane z WiFi
+// -------------------------
 bool wifiActive = false;      // ESP połączone z siecią
 bool wifiConnecting = false;  // Próba połączenia (flaga informacyjna)
 bool wifiEnabled = false;     // Użytkownik włączył WiFi (przytrzymanie przycisku)
 
+// -------------------------
 // Zmienne do wyświetlania komunikatów potwierdzających zmianę ustawień
+// -------------------------
 String confirmationMsg = "";
 unsigned long confirmationMsgTimestamp = 0;
 // Czas wyświetlania komunikatu (np. STUDY: 20 min lub Switch to)
 const unsigned long confirmationMsgDuration = 1100; // ms
 
-// Zmienne do szybszej aktualizacji wyświetlacza
+// -------------------------
+// Zmienne do szybszej aktualizacji wyświetlacza OLED
+// -------------------------
 unsigned long lastDisplayUpdate = 0;
 const unsigned long displayUpdateInterval = 200; // aktualizacja co 200 ms
 
-// -------------------------------
+// -------------------------
 // Obsługa przycisku – multi-click z mechanizmem "blokady" dla jednego bloku
-// -------------------------------
+// -------------------------
 const unsigned long clickTimeout = 300;       // czas oczekiwania na kolejne kliknięcie (300 ms)
 const unsigned long longPressThreshold = 5000;  // próg długiego przytrzymania (5000 ms)
 
@@ -313,6 +339,9 @@ void setup() {
     Wire.begin();
   #endif
   
+  // Inicjalizacja TM1637
+  tmDisplay.setBrightness(0x0f);  // Maksymalna jasność
+  
   isStudying = true;
   currentTimer = studyTimeSetting;
   studySessions++;
@@ -439,9 +468,14 @@ void loop() {
         studySessions++;
       }
     }
+    // Aktualizacja TM1637 - wyświetlanie w formacie mmss
+    int minutes = currentTimer / 60;
+    int seconds = currentTimer % 60;
+    int displayValue = minutes * 100 + seconds;
+    tmDisplay.showNumberDecEx(displayValue, 0b01000000, true);
   }
   
-  // Aktualizacja wyświetlacza (co 200 ms)
+  // Aktualizacja wyświetlacza OLED (co 200 ms)
   if (currentMillis - lastDisplayUpdate >= displayUpdateInterval) {
     lastDisplayUpdate = currentMillis;
     if (isStudying) {
