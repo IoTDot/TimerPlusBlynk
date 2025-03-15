@@ -10,4 +10,9 @@
 #define WIFI_SSID     "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
 
+#define FIREBASE_SECRET "YOUR_FIREBASE_SECRET"
+// Zwróć uwagę, że adres URL może się różnić w zależności od Twojego projektu.
+// Upewnij się, że końcówka adresu to .json oraz dodajesz parametr auth.
+#define FIREBASE_URL "https://yourproject.firebaseio.com/stats.json?auth=YOUR_FIREBASE_SECRET"
+
 #endif // CONFIG_H

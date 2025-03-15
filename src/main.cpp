@@ -1,13 +1,15 @@
 #include "config.h"
 #include <Arduino.h>
-#include <Bounce2.h>  // Biblioteka Bounce2
+#include <Bounce2.h>
 
 #if defined(ESP32)
   #include <WiFi.h>
   #include <BlynkSimpleEsp32.h>
+  #include <HTTPClient.h>
 #elif defined(ESP8266)
   #include <ESP8266WiFi.h>
   #include <BlynkSimpleEsp8266.h>
+  #include <ESP8266HTTPClient.h>
 #else
   #error "This code only supports ESP32 and ESP8266 boards."
 #endif
@@ -17,8 +19,6 @@
 #include <Adafruit_SSD1306.h>
 #include "wifi_icon.h"    // Rysowanie ikony WiFi
 #include "led_control.h"  // Sterowanie LED przez PWM (30% mocy)
-
-// Dodajemy bibliotekę TM1637Display
 #include <TM1637Display.h>
 
 // -------------------------
@@ -68,43 +68,90 @@ unsigned int breakSessions   = 0;
 // Zmienne związane z WiFi
 // -------------------------
 bool wifiActive = false;      // ESP połączone z siecią
-bool wifiConnecting = false;  // Próba połączenia (flaga informacyjna)
+bool wifiConnecting = false;  // Próba połączenia
 bool wifiEnabled = false;     // Użytkownik włączył WiFi (przytrzymanie przycisku)
 
 // -------------------------
-// Zmienne do wyświetlania komunikatów potwierdzających zmianę ustawień
+// Zmienne do wyświetlania komunikatów
 // -------------------------
 String confirmationMsg = "";
 unsigned long confirmationMsgTimestamp = 0;
-// Czas wyświetlania komunikatu (np. STUDY: 20 min lub Switch to)
 const unsigned long confirmationMsgDuration = 1100; // ms
 
 // -------------------------
-// Zmienne do szybszej aktualizacji wyświetlacza OLED
+// Zmienne do aktualizacji OLED
 // -------------------------
 unsigned long lastDisplayUpdate = 0;
-const unsigned long displayUpdateInterval = 200; // aktualizacja co 200 ms
+const unsigned long displayUpdateInterval = 200; // co 200 ms
 
 // -------------------------
-// Obsługa przycisku – multi-click z mechanizmem "blokady" dla jednego bloku
+// Obsługa przycisku – multi-click
 // -------------------------
-const unsigned long clickTimeout = 300;       // czas oczekiwania na kolejne kliknięcie (300 ms)
-const unsigned long longPressThreshold = 5000;  // próg długiego przytrzymania (5000 ms)
-
+const unsigned long clickTimeout = 300;       // 300 ms
+const unsigned long longPressThreshold = 5000;  // 5000 ms
 unsigned long buttonPressStartTime = 0;
 unsigned long lastButtonReleaseTime = 0;
 int clickCount = 0;
 bool buttonIsPressed = false;
 bool longPressTriggered = false;
-
-// Mechanizm "cooldown" – po zakończeniu sekwencji kliknięć (uruchomieniu bloku)
-// nie przyjmujemy kolejnych kliknięć, aż do wygaśnięcia komunikatu potwierdzającego
 bool newMultiClickAllowed = true;
 unsigned long lastMultiClickProcessTime = 0;
 const unsigned long multiClickProcessCooldown = 500; // ms
-
-// Inicjujemy obiekt Bounce dla przycisku
 Bounce debouncedButton = Bounce();
+
+// -------------------------
+// Konfiguracja Firebase
+// -------------------------
+// Używamy danych zdefiniowanych w config.h
+const char* firebaseURL = FIREBASE_URL;
+
+// ---------------------------------------------------------------------
+// Funkcja wysyłająca statystyki do Firebase
+// ---------------------------------------------------------------------
+void sendStatsToFirebase() {
+  #if defined(ESP8266) || defined(ESP32)
+    WiFiClientSecure client;
+    client.setInsecure();  // Wyłącza weryfikację certyfikatu – używaj ostrożnie!
+  #else
+    WiFiClient client;
+  #endif
+  
+  HTTPClient http;
+  http.begin(client, firebaseURL);  // Używamy nowego API z klientem
+  http.addHeader("Content-Type", "application/json");
+  
+  String jsonData = "{";
+  jsonData += "\"totalStudyTime\":" + String(totalStudyTime) + ",";
+  jsonData += "\"totalBreakTime\":" + String(totalBreakTime) + ",";
+  jsonData += "\"overallTime\":" + String(overallTime) + ",";
+  jsonData += "\"studySessions\":" + String(studySessions) + ",";
+  jsonData += "\"breakSessions\":" + String(breakSessions);
+  jsonData += "}";
+  
+  int httpResponseCode = http.PUT(jsonData);
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+    Serial.print("Firebase Response: ");
+    Serial.println(response);
+  } else {
+    Serial.print("Błąd wysyłania do Firebase: ");
+    Serial.println(httpResponseCode);
+  }
+  http.end();
+}
+
+// ---------------------------------------------------------------------
+// Funkcja wysyłająca statystyki do Blynk i Firebase
+// ---------------------------------------------------------------------
+void sendAllStats() {
+  Blynk.virtualWrite(V3, totalStudyTime / 60);
+  Blynk.virtualWrite(V4, totalBreakTime / 60);
+  Blynk.virtualWrite(V5, overallTime / 60);
+  Blynk.virtualWrite(V6, studySessions);
+  Blynk.virtualWrite(V7, breakSessions);
+  Serial.println("Statystyki wysłane do Blynk.");
+  sendStatsToFirebase();
+}
 
 // ---------------------------------------------------------------------
 // Funkcja przełączająca tryb (Study <-> Break)
@@ -121,6 +168,7 @@ void switchMode() {
     currentTimer = studyTimeSetting;
     studySessions++;
   }
+  sendAllStats();
 }
 
 // ---------------------------------------------------------------------
@@ -132,19 +180,18 @@ void processClicks(int count) {
   Serial.println(" kliknięć");
   
   if (count == 1) {
-    // 1 klik – reset licznika dla aktualnego trybu
     if (isStudying) {
       currentTimer = studyTimeSetting;
       confirmationMsg = "Reset\nSTUDY";
       Serial.println("Reset licznika STUDY");
-    } else {
+    }
+    else {
       currentTimer = breakTimeSetting;
       confirmationMsg = "Reset\nBREAK";
       Serial.println("Reset licznika BREAK");
     }
   }
   else if (count == 2) {
-    // 2 kliki – zmiana czasu STUDY między 10 a 20 minut
     if (studyTimeSetting == 10 * 60) {
       studyTimeSetting = 20 * 60;
       confirmationMsg = "STUDY:\n20 min";
@@ -159,7 +206,6 @@ void processClicks(int count) {
     }
   }
   else if (count == 3) {
-    // 3 kliki – zmiana czasu BREAK między 5 a 10 minut
     if (breakTimeSetting == 5 * 60) {
       breakTimeSetting = 10 * 60;
       confirmationMsg = "BREAK:\n10 min";
@@ -174,7 +220,6 @@ void processClicks(int count) {
     }
   }
   else if (count == 4) {
-    // 4 kliki – natychmiastowe przełączenie trybu
     confirmationMsg = "Switch\nto";
     Serial.println("Wymuszone przełączenie trybu");
     switchMode();
@@ -182,21 +227,21 @@ void processClicks(int count) {
   else {
     Serial.println("Nieobsługiwana liczba kliknięć");
   }
-  // Zapisujemy moment wystawienia komunikatu
   confirmationMsgTimestamp = millis();
+  sendAllStats();
 }
 
 // ---------------------------------------------------------------------
 // Funkcja do przełączania WiFi
 // ---------------------------------------------------------------------
 void toggleWiFi() {
-  if (!wifiEnabled) { // Jeśli WiFi jest wyłączone, to je włączamy
+  if (!wifiEnabled) {
     Serial.println("Włączanie WiFi...");
-    wifiEnabled = true;  // Użytkownik włączył WiFi
+    wifiEnabled = true;
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     wifiConnecting = true;
-  } else {  // Jeśli WiFi jest włączone, to je wyłączamy
+  } else {
     Serial.println("Wyłączanie WiFi...");
     wifiEnabled = false;
     Blynk.disconnect();
@@ -217,6 +262,7 @@ BLYNK_WRITE(V1) {
   if (isStudying) {
     currentTimer = studyTimeSetting;
   }
+  sendAllStats();
 }
 
 BLYNK_WRITE(V2) {
@@ -227,6 +273,7 @@ BLYNK_WRITE(V2) {
   if (!isStudying) {
     currentTimer = breakTimeSetting;
   }
+  sendAllStats();
 }
 
 BLYNK_WRITE(V0) {
@@ -237,10 +284,10 @@ BLYNK_WRITE(V0) {
 }
 
 // ---------------------------------------------------------------------
-// Funkcja pomocnicza do rysowania wieloliniowego, wyśrodkowanego komunikatu
+// Funkcja pomocnicza do rysowania komunikatu na OLED
 // ---------------------------------------------------------------------
 void displayConfirmationMsg(const String &msg) {
-  const int maxLines = 10; // maksymalna liczba linii
+  const int maxLines = 10;
   String lines[maxLines];
   int numLines = 0;
   
@@ -257,7 +304,6 @@ void displayConfirmationMsg(const String &msg) {
   
   display.setTextSize(2);
   display.setTextColor(SSD1306_WHITE);
-  
   int lineHeight = 26;
   int totalHeight = numLines * lineHeight;
   int startY = (SCREEN_HEIGHT - totalHeight) / 2;
@@ -284,7 +330,6 @@ void updateDisplay(unsigned long seconds, const char* label) {
     display.display();
     return;
   } else {
-    // Po upływie czasu komunikatu czyścimy zmienną
     confirmationMsg = "";
   }
   
@@ -301,7 +346,6 @@ void updateDisplay(unsigned long seconds, const char* label) {
   int minutes = seconds / 60;
   int sec = seconds % 60;
   char timeStr[16];
-  // Używamy snprintf zamiast sprintf, aby ograniczyć liczbę zapisywanych bajtów
   snprintf(timeStr, sizeof(timeStr), "%02d:%02d", minutes, sec);
   
   display.setTextSize(3);
@@ -312,28 +356,13 @@ void updateDisplay(unsigned long seconds, const char* label) {
   display.print(timeStr);
   
   drawWiFiIcon(display, wifiActive, wifiConnecting);
-  
   display.display();
-}
-
-// ---------------------------------------------------------------------
-// Funkcja wysyłająca statystyki do Blynk
-// ---------------------------------------------------------------------
-void sendStatsToBlynk() {
-  // Konwersja sekund na minuty (dzielimy przez 60)
-  Blynk.virtualWrite(V3, totalStudyTime / 60);
-  Blynk.virtualWrite(V4, totalBreakTime / 60);
-  Blynk.virtualWrite(V5, overallTime / 60);
-  Blynk.virtualWrite(V6, studySessions);
-  Blynk.virtualWrite(V7, breakSessions);
-  Serial.println("Statystyki wysłane do Blynk.");
 }
 
 // ---------------------------------------------------------------------
 // Funkcja wysyłająca dane do wykresu (History Chart) na V8
 // ---------------------------------------------------------------------
 void sendGraphStats() {
-  // Przykładowo wysyłamy łączny czas nauki – możesz zmienić na dowolną statystykę
   Blynk.virtualWrite(V8, totalStudyTime / 60);
   Serial.println("Dane do wykresu wysłane do Blynk.");
 }
@@ -343,7 +372,7 @@ void setup() {
   pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
   
   debouncedButton.attach(BOOT_BUTTON_PIN);
-  debouncedButton.interval(5); // czas odsprzężenia (ms)
+  debouncedButton.interval(5);
   
   initLED();
   
@@ -362,32 +391,27 @@ void setup() {
     Wire.begin();
   #endif
   
-  // Inicjalizacja TM1637
-  tmDisplay.setBrightness(0x0f);  // Maksymalna jasność
+  tmDisplay.setBrightness(0x0f);
   
   isStudying = true;
   currentTimer = studyTimeSetting;
-  studySessions++;  // Rozpoczęcie pierwszej sesji STUDY
+  studySessions++;  // Pierwsza sesja STUDY
   lastSecondMillis = millis();
   
-  timer.setInterval(5000L, sendStatsToBlynk);
-  timer.setInterval(60000L, sendGraphStats);  // Wysyłanie danych do wykresu co minutę
+  // Wysyłanie danych do wykresu co minutę
+  timer.setInterval(60000L, sendGraphStats);
+  
+  // Po starcie wysyłamy statystyki do Blynk oraz Firebase
+  sendAllStats();
 }
 
 void loop() {
   unsigned long currentMillis = millis();
 
-  // ------------------------------
-  // Obsługa przycisku z Bounce2 – multi-click
-  // ------------------------------
   debouncedButton.update();
-  
-  // Sprawdzamy, czy jest aktywny komunikat potwierdzający (czyli blok już został uruchomiony)
   bool confirmationActive = (confirmationMsg != "" && (currentMillis - confirmationMsgTimestamp < confirmationMsgDuration));
   
-  // Jeśli aktywny komunikat – nie przetwarzamy nowych kliknięć
   if (!confirmationActive) {
-    // Odblokowanie rozpoczęcia nowej sekwencji, jeśli przycisk jest wolny i minął cooldown
     if (!newMultiClickAllowed) {
       if (debouncedButton.read() == HIGH &&
           (currentMillis - lastMultiClickProcessTime >= multiClickProcessCooldown)) {
@@ -396,26 +420,22 @@ void loop() {
     }
     
     if (newMultiClickAllowed) {
-      // Wykrycie naciśnięcia przycisku (przejście HIGH -> LOW)
       if (debouncedButton.fell()) {
         buttonIsPressed = true;
         buttonPressStartTime = currentMillis;
         longPressTriggered = false;
       }
       
-      // Sprawdzamy, czy przycisk jest przytrzymany – długie naciśnięcie
       if (buttonIsPressed && debouncedButton.read() == LOW && !longPressTriggered) {
         if (currentMillis - buttonPressStartTime >= longPressThreshold) {
           longPressTriggered = true;
           toggleWiFi();
-          // Długie przytrzymanie – resetujemy liczenie kliknięć
           clickCount = 0;
           newMultiClickAllowed = false;
           lastMultiClickProcessTime = currentMillis;
         }
       }
       
-      // Wykrycie puszczenia przycisku (przejście LOW -> HIGH)
       if (debouncedButton.rose()) {
         if (!longPressTriggered) {
           clickCount++;
@@ -424,7 +444,6 @@ void loop() {
         buttonIsPressed = false;
       }
       
-      // Jeśli minął czas oczekiwania na kolejne kliknięcie – przetwarzamy sekwencję
       if (!buttonIsPressed && clickCount > 0 &&
           (currentMillis - lastButtonReleaseTime >= clickTimeout)) {
         processClicks(clickCount);
@@ -434,14 +453,10 @@ void loop() {
       }
     }
   }
-  // ------------------------------
-  // Koniec obsługi przycisku multi-click
   
-  // Sterowanie LED – aktywna, gdy WiFi włączone, ale niepołączone
   bool ledShouldBeOn = (wifiEnabled && !wifiActive);
   updateLED(ledShouldBeOn);
   
-  // Obsługa połączenia WiFi
   if (wifiEnabled) {
     if (WiFi.status() == WL_CONNECTED) {
       if (!wifiActive) {
@@ -467,7 +482,6 @@ void loop() {
     timer.run();
   }
   
-  // Aktualizacja timera (co 1 sekundę)
   if (currentMillis - lastSecondMillis >= 1000) {
     lastSecondMillis = currentMillis;
     overallTime++;
@@ -479,17 +493,14 @@ void loop() {
     if (currentTimer > 0) {
       currentTimer--;
     } else {
-      // Automatyczne przełączenie trybu po zakończeniu odliczania
       switchMode();
     }
-    // Aktualizacja TM1637 - wyświetlanie w formacie mmss
     int minutes = currentTimer / 60;
     int seconds = currentTimer % 60;
     int displayValue = minutes * 100 + seconds;
     tmDisplay.showNumberDecEx(displayValue, 0b01000000, true);
   }
   
-  // Aktualizacja wyświetlacza OLED (co 200 ms)
   if (currentMillis - lastDisplayUpdate >= displayUpdateInterval) {
     lastDisplayUpdate = currentMillis;
     if (isStudying) {
