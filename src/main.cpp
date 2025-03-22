@@ -1,6 +1,7 @@
 #include "config.h"
 #include <Arduino.h>
 #include <Bounce2.h>
+#include <ArduinoJson.h>  // Dodajemy bibliotekę ArduinoJson
 
 #if defined(ESP32)
   #include <WiFi.h>
@@ -58,6 +59,11 @@ unsigned long totalBreakTime = 0;
 unsigned long overallTime    = 0;
 unsigned int studySessions   = 0;
 unsigned int breakSessions   = 0;
+
+// -------------------------
+// Flaga pobrania statystyk
+// -------------------------
+bool statsFetched = false;
 
 // -------------------------
 // Przycisk BOOT
@@ -152,6 +158,56 @@ void sendAllStats() {
   Serial.println("Statystyki wysłane do Blynk.");
   sendStatsToFirebase();
 }
+
+// ---------------------------------------------------------------------
+// Funkcja pobierająca dane ze Firebase
+// ---------------------------------------------------------------------
+void fetchStatsFromFirebase() {
+  #if defined(ESP8266) || defined(ESP32)
+    WiFiClientSecure client;
+    client.setInsecure();
+  #else
+    WiFiClient client;
+  #endif
+  
+  HTTPClient http;
+  http.begin(client, firebaseURL);
+  
+  int httpResponseCode = http.GET();
+  if (httpResponseCode > 0) {
+    String payload = http.getString();
+    Serial.print("Odebrane dane z Firebase: ");
+    Serial.println(payload);
+    
+    DynamicJsonDocument doc(512);
+    DeserializationError error = deserializeJson(doc, payload.c_str());
+    if (!error) {
+      totalStudyTime = doc["totalStudyTime"] | 0;
+      totalBreakTime = doc["totalBreakTime"] | 0;
+      overallTime    = doc["overallTime"] | 0;
+      studySessions  = doc["studySessions"] | 0;
+      breakSessions  = doc["breakSessions"] | 0;
+      
+      Serial.println("Pobrano statystyki z Firebase:");
+      Serial.print("totalStudyTime: "); Serial.println(totalStudyTime);
+      Serial.print("totalBreakTime: "); Serial.println(totalBreakTime);
+      Serial.print("overallTime: "); Serial.println(overallTime);
+      Serial.print("studySessions: "); Serial.println(studySessions);
+      Serial.print("breakSessions: "); Serial.println(breakSessions);
+      
+      // Aktualizacja statystyk w Blynk:
+      sendAllStats();
+    } else {
+      Serial.print("Błąd parsowania JSON: ");
+      Serial.println(error.c_str());
+    }
+  } else {
+    Serial.print("Błąd pobierania danych z Firebase, kod: ");
+    Serial.println(httpResponseCode);
+  }
+  http.end();
+}
+
 
 // ---------------------------------------------------------------------
 // Funkcja przełączająca tryb (Study <-> Break)
@@ -465,12 +521,20 @@ void loop() {
         wifiConnecting = false;
         Blynk.config(BLYNK_AUTH_TOKEN);
         Blynk.connect();
+        // Przy pierwszym połączeniu pobieramy statystyki z Firebase (wykonujemy dwa pobrania)
+        if (!statsFetched) {
+          fetchStatsFromFirebase();
+          delay(500);  // krótka przerwa
+          fetchStatsFromFirebase();
+          statsFetched = true;
+        }
       }
     } else {
       if (wifiActive) {
         Serial.println("Utracono połączenie, ponawiam próbę...");
         wifiActive = false;
         wifiConnecting = true;
+        statsFetched = false; // resetujemy flagę przy utracie połączenia
         WiFi.disconnect();
         WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
       }
