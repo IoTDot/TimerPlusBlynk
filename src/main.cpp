@@ -147,9 +147,16 @@ void sendStatsToFirebase() {
 }
 
 // ---------------------------------------------------------------------
-// Funkcja wysyłająca statystyki do Blynk i Firebase
+// Funkcja wysyłająca statystyki do Blynk i Firebase oraz logująca wysyłane dane
 // ---------------------------------------------------------------------
 void sendAllStats() {
+  Serial.println(">>> sendAllStats() - Wysyłanie statystyk do Blynk i Firebase");
+  Serial.print("totalStudyTime: "); Serial.println(totalStudyTime);
+  Serial.print("totalBreakTime: "); Serial.println(totalBreakTime);
+  Serial.print("overallTime: "); Serial.println(overallTime);
+  Serial.print("studySessions: "); Serial.println(studySessions);
+  Serial.print("breakSessions: "); Serial.println(breakSessions);
+
   Blynk.virtualWrite(V3, totalStudyTime / 60);
   Blynk.virtualWrite(V4, totalBreakTime / 60);
   Blynk.virtualWrite(V5, overallTime / 60);
@@ -207,7 +214,6 @@ void fetchStatsFromFirebase() {
   }
   http.end();
 }
-
 
 // ---------------------------------------------------------------------
 // Funkcja przełączająca tryb (Study <-> Break)
@@ -521,10 +527,8 @@ void loop() {
         wifiConnecting = false;
         Blynk.config(BLYNK_AUTH_TOKEN);
         Blynk.connect();
-        // Przy pierwszym połączeniu pobieramy statystyki z Firebase (wykonujemy dwa pobrania)
+        // Pobierz dane z Firebase tylko przy pierwszym połączeniu
         if (!statsFetched) {
-          fetchStatsFromFirebase();
-          delay(500);  // krótka przerwa
           fetchStatsFromFirebase();
           statsFetched = true;
         }
